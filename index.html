@@ -8,38 +8,110 @@
 </head>
 <body>
 
-    <h1>PNG Photo Editor</h1>
+    <h1>Photo Editor</h1>
 
     <input type="file" id="imageLoader" accept="image/png, image/jpeg">
     <br>
+
+    <div id="toolbar" style="margin-bottom: 15px; padding: 10px; background-color: #eee; border-radius: 5px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;">
+        <!-- Tool Activation Buttons -->
+        <button id="selectToolBtn" class="tool-btn active-tool" title="Select Tool (Default)">✋ Select</button>
+        <button id="cropToolBtn" class="tool-btn" title="Crop Tool">✂️ Crop</button>
+        <button id="snipToolBtn" class="tool-btn" title="Snip & Swap Tool">🔄 Snip</button>
+        <button id="drawToolBtn" class="tool-btn" title="Draw Tool">✏️ Draw</button>
+        <button id="textToolBtn" class="tool-btn" title="Text Tool"> T Text</button>
+        <button id="bubbleToolBtn" class="tool-btn" title="Comic Bubble Tool">💬 Bubble</button>
+        <span style="border-left: 1px solid #ccc; margin: 0 10px;"></span> <!-- Separator -->
+        <!-- Existing Filters -->
+        <button id="grayscaleBtn" title="Grayscale Filter">Grayscale</button>
+        <button id="sepiaBtn" title="Sepia Filter">Sepia</button>
+        <button id="invertBtn" title="Invert Colors Filter">Invert</button>
+        <span style="border-left: 1px solid #ccc; margin: 0 10px;"></span> <!-- Separator -->
+        <!-- Existing Transforms -->
+        <button id="rotateLeftBtn" title="Rotate Left">Rotate L</button>
+        <button id="rotateRightBtn" title="Rotate Right">Rotate R</button>
+        <span style="border-left: 1px solid #ccc; margin: 0 10px;"></span> <!-- Separator -->
+        <!-- Global Actions -->
+        <button id="revertBtn" title="Revert to Original Loaded Image">Revert All</button>
+        <a id="downloadLnk" download="edited-image.png" href="#" title="Download Image">Download</a>
+    </div>
+
+    <!-- Tool Specific Options Panels (Initially Hidden) -->
+    <div id="toolOptionsPanel" style="margin-bottom: 15px; padding: 10px; background-color: #f8f8f8; border: 1px solid #ddd; border-radius: 5px; min-height: 40px;">
+
+        <!-- Crop Options -->
+        <div id="cropOptions" class="tool-options" style="display: none;">
+            <span>Crop Tool Active: Drag on image to select area.</span>
+            <button id="confirmCropBtn">Confirm Crop</button>
+            <button id="cancelCropBtn">Cancel Crop</button>
+        </div>
+
+        <!-- Snip Options -->
+        <div id="snipOptions" class="tool-options" style="display: none;">
+            <span id="snipStatus">Snip Tool Active: Select Area 1.</span>
+            <button id="confirmSnip1Btn" disabled>Confirm Snip 1</button>
+            <button id="startSelection2Btn" disabled>Select Area 2</button>
+            <button id="confirmSnip2Btn" disabled>Confirm Snip 2 & Swap</button>
+            <button id="cancelSnipBtn">Cancel Snip</button>
+        </div>
+
+        <!-- Draw Options -->
+        <div id="drawOptions" class="tool-options" style="display: none;">
+            <label for="drawColor">Color:</label>
+            <input type="color" id="drawColor" value="#ff0000">
+            <label for="drawSize">Size:</label>
+            <input type="range" id="drawSize" min="1" max="50" value="5">
+            <span id="drawSizeValue">5px</span>
+            <span> - Draw directly on the image.</span>
+        </div>
+
+        <!-- Text Options -->
+        <div id="textOptions" class="tool-options" style="display: none;">
+            <label for="textColor">Color:</label>
+            <input type="color" id="textColor" value="#000000">
+            <label for="textSize">Size:</label>
+            <input type="number" id="textSize" min="8" max="200" value="30" style="width: 60px;"> px
+            <label for="textFont">Font:</label>
+            <select id="textFont">
+                <option value="Arial">Arial</option>
+                <option value="Verdana">Verdana</option>
+                <option value="Times New Roman">Times New Roman</option>
+                <option value="Courier New">Courier New</option>
+                <option value="Comic Sans MS">Comic Sans MS</option>
+                <option value="Impact">Impact</option>
+            </select>
+            <label for="textInput">Text:</label>
+            <input type="text" id="textInput" placeholder="Enter text here...">
+            <button id="addTextBtn">Add Text</button>
+            <span> - Click 'Add Text', then click on the image to place.</span>
+        </div>
+
+        <!-- Bubble Options -->
+        <div id="bubbleOptions" class="tool-options" style="display: none;">
+            <label for="bubbleType">Type:</label>
+            <select id="bubbleType">
+                <option value="speech">Speech Bubble</option>
+                <option value="thought">Thought Bubble</option>
+                <!-- Add more later -->
+            </select>
+            <label for="bubbleText">Text:</label>
+            <input type="text" id="bubbleText" placeholder="Bubble text...">
+             <label for="bubbleColor">Color:</label>
+            <input type="color" id="bubbleColor" value="#000000">
+             <label for="bubbleFill">Fill:</label>
+            <input type="color" id="bubbleFill" value="#ffffff">
+            <button id="addBubbleBtn">Add Bubble</button>
+            <span> - Click 'Add Bubble', then click image to place.</span>
+        </div>
+
+         <!-- Default/Select Tool Message -->
+         <div id="selectOptions" class="tool-options" style="display: block;">
+            <span>Select a tool from the toolbar above or apply filters/transforms.</span>
+        </div>
+    </div>
+
     <canvas id="imageCanvas"></canvas>
     <br>
-    <div id="filterControls" style="margin-bottom: 15px;">
-        <button id="grayscaleBtn">Apply Grayscale</button>
-        <button id="sepiaBtn">Apply Sepia</button>
-        <button id="invertBtn">Invert Colors</button>
-    </div>
-
-    <div id="transformControls" style="margin-bottom: 15px;">
-        <button id="rotateLeftBtn">Rotate 90° Left</button>
-        <button id="rotateRightBtn">Rotate 90° Right</button>
-        <button id="startCropBtn">Select Crop Area</button>
-        <button id="confirmCropBtn" disabled>Confirm Crop</button>
-    </div>
-
-    <a id="downloadLnk" download="edited-image.png" href="#">Download Image</a>
-
-    <hr style="margin: 20px 0; width: 80%;">
-
-    <h2>Snip & Swap Tool</h2>
-    <div id="snipControls" style="display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; margin-bottom: 15px;">
-        <button id="startSelectionBtn">Select Area 1</button>
-        <button id="confirmSnip1Btn" disabled>Confirm Snip 1 & Clear</button>
-        <button id="startSelection2Btn" disabled>Select Area 2</button>
-        <button id="confirmSnip2Btn" disabled>Confirm Snip 2 & Swap</button>
-        <button id="revertBtn">Revert to Original</button>
-        <div id="snipStatus" style="width: 100%; text-align: center; margin-top: 5px; font-style: italic;">Load an image to begin.</div>
-    </div>
 
     <script src="script.js" defer></script>
 </body>

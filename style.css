@@ -49,4 +49,65 @@ a {
 
 a:hover {
     background-color: #218838;
+}
+
+/* Toolbar Styles */
+#toolbar {
+    border-bottom: 2px solid #ccc;
+    padding-bottom: 10px;
+}
+
+#toolbar button, #toolbar a {
+    /* Styles for buttons/links within the toolbar */
+    margin: 2px; /* Reduce margin slightly */
+}
+
+.tool-btn {
+    background-color: #6c757d; /* Default tool button color */
+}
+
+.tool-btn.active-tool {
+    background-color: #007bff; /* Active tool color */
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Tool Options Panel Styles */
+#toolOptionsPanel {
+    width: 90%;
+    max-width: 800px; /* Limit width */
+    box-sizing: border-box;
+}
+
+.tool-options {
+    display: flex; /* Use flexbox for alignment */
+    flex-wrap: wrap; /* Allow wrapping */
+    align-items: center; /* Align items vertically */
+    gap: 10px; /* Spacing between items */
+}
+
+.tool-options label {
+    margin-right: 5px;
+}
+
+.tool-options input[type="color"] {
+    height: 25px;
+    padding: 0 2px;
+    vertical-align: middle;
+}
+
+.tool-options input[type="range"] {
+    vertical-align: middle;
+}
+
+.tool-options select,
+.tool-options input[type="text"],
+.tool-options input[type="number"] {
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+/* Add some basic styling for canvas interaction later */
+canvas#imageCanvas {
+    cursor: default; /* Default cursor */
 } 
