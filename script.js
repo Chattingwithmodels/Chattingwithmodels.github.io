@@ -70,10 +70,32 @@ let textPlacementCoords = null;
 // Bubble State
 let bubbleToPlace = { type: 'speech', text: '', color: '#000000', fill: '#ffffff' };
 let bubblePlacementCoords = null;
+// Undo History
+const MAX_HISTORY = 20;
+let historyStack = [];
+// Objects on Canvas
+let canvasObjects = [];
+// Selection State
+let selectedObject = null;
+let clickOffset = { x: 0, y: 0 }; // Offset between click point and object top-left
+let anchorOffset = { x: 0, y: 0 }; // Offset between click point and bubble anchor point
+let resizingHandle = null; // Which resize handle is being dragged (e.g., 'bottomRight')
+let resizeStart = { x: 0, y: 0, width: 0, height: 0, size: 0 }; // Initial state at resize start
+
+// Constants
+const HANDLE_SIZE = 8;
 
 // ==================================
 //          Utility Functions
 // ==================================
+
+// Function to check if a point is inside a rectangle
+function isPointInRect(point, rect) {
+    if (!point || !rect) return false;
+    return point.x >= rect.x && point.x <= rect.x + rect.width &&
+           point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
 function getCanvasCoordinates(event) {
     if (!imageCanvas) return { x: 0, y: 0 };
     const rect = imageCanvas.getBoundingClientRect();
@@ -116,26 +138,113 @@ function updateCurrentImageStateBuffer() {
 }
 
 function redrawBaseImage() {
-    if (!imageLoaded || !ctx || !imageCanvas) return;
+    if (!ctx || !imageCanvas) {
+        console.warn("RedrawBaseImage: Missing context or canvas");
+        return; // Don't proceed without context/canvas
+    }
     try {
         ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
         if (currentImageDataForRedraw) {
+            // Ensure canvas dimensions match buffer before putting data
+            if (imageCanvas.width !== currentImageDataForRedraw.width || imageCanvas.height !== currentImageDataForRedraw.height) {
+                 console.warn("RedrawBaseImage: Adjusting canvas size to match buffer.");
+                 imageCanvas.width = currentImageDataForRedraw.width;
+                 imageCanvas.height = currentImageDataForRedraw.height;
+             }
             ctx.putImageData(currentImageDataForRedraw, 0, 0);
-        } else if (originalImage) {
-            if (imageCanvas.width !== originalImage.naturalWidth || imageCanvas.height !== originalImage.naturalHeight) {
-                 console.warn("Canvas dimensions differ from original. Adjusting.");
+        } else if (originalImage && imageLoaded) {
+            // Ensure canvas dimensions match original image
+             if (imageCanvas.width !== originalImage.naturalWidth || imageCanvas.height !== originalImage.naturalHeight) {
+                 console.warn("RedrawBaseImage: Adjusting canvas size to match original image.");
                  imageCanvas.width = originalImage.naturalWidth;
                  imageCanvas.height = originalImage.naturalHeight;
              }
             ctx.drawImage(originalImage, 0, 0, imageCanvas.width, imageCanvas.height);
-            if (!currentImageDataForRedraw) updateCurrentImageStateBuffer();
+            if (!currentImageDataForRedraw) updateCurrentImageStateBuffer(); // Create buffer if missing
         } else {
+             // If no buffer and no image, clear (though should ideally show placeholder)
              ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
         }
     } catch (e) {
         console.error("Error during redrawBaseImage:", e);
-        alert("Error redrawing image.");
+        // Avoid alert loops, just log the error
     }
+}
+
+function drawCanvasObjects() {
+    if (!ctx) return;
+    canvasObjects.forEach(obj => {
+        console.log(`Drawing obj:`, obj, ` | Currently selected:`, selectedObject);
+        try {
+            if (obj.type === 'text') {
+                ctx.fillStyle = obj.color;
+                ctx.font = `${obj.size}px ${obj.font}`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'top';
+                ctx.fillText(obj.text, obj.x, obj.y);
+            } else if (obj.type === 'bubble') {
+                // Pass the original anchor point for drawing, but use stored x,y,w,h for selection rect
+                 drawComicBubble(ctx, obj.anchorX, obj.anchorY, obj.text, {
+                     type: obj.bubbleType,
+                     stroke: obj.color,
+                     fill: obj.fill,
+                     font: obj.font
+                });
+            }
+
+            // Draw selection box and handles if this object is selected
+            if (obj === selectedObject) {
+                console.log("   >>> Drawing selection highlight for:", obj);
+                const x = obj.x;
+                const y = obj.y;
+                const w = obj.width;
+                const h = obj.height;
+
+                // Draw main bounding box
+                ctx.strokeStyle = 'rgba(0, 100, 255, 0.7)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 3]);
+                ctx.strokeRect(x, y, w, h);
+                ctx.setLineDash([]);
+
+                // Draw resize handle (bottom-right for now)
+                ctx.fillStyle = 'rgba(0, 100, 255, 0.8)';
+                ctx.fillRect(x + w - HANDLE_SIZE / 2, y + h - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(x + w - HANDLE_SIZE / 2, y + h - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+            }
+        } catch (e) {
+            console.error("Error drawing object:", obj, e);
+        }
+    });
+}
+
+function redrawFullCanvas() {
+    console.log("Redrawing full canvas...");
+    redrawBaseImage();
+    drawCanvasObjects();
+}
+
+// Function to save the current state to the history stack
+function saveStateToHistory() {
+    if (!currentImageDataForRedraw) {
+        console.warn("Attempted to save null state to history.");
+        return;
+    }
+    // IMPORTANT: Create a deep copy of the ImageData object
+    const stateCopy = new ImageData(
+        new Uint8ClampedArray(currentImageDataForRedraw.data),
+        currentImageDataForRedraw.width,
+        currentImageDataForRedraw.height
+    );
+
+    if (historyStack.length >= MAX_HISTORY) {
+        historyStack.shift(); // Remove the oldest state if limit reached
+    }
+    historyStack.push(stateCopy);
+    console.log(`History saved. Stack size: ${historyStack.length}`);
+    updateToolStates(); // Update UI (e.g., enable Undo button)
 }
 
 // ==================================
@@ -185,7 +294,7 @@ function resetToolState(toolName) {
                     redrawBaseImage();
                     if(ctx) ctx.putImageData(snip1Data, snip1Rect.x, snip1Rect.y);
                     updateCurrentImageStateBuffer();
-                } else { redrawBaseImage(); }
+                 }
                 snipState = 'idle';
                 snip1Data = null; snip1Rect = null; snip2Rect = null;
             }
@@ -198,13 +307,13 @@ function resetToolState(toolName) {
             bubbleToPlace.text = ''; bubblePlacementCoords = null;
             if(bubbleTextInput) bubbleTextInput.value = ''; break;
     }
-    redrawBaseImage();
+    redrawFullCanvas();
 }
 
 function updateToolStates() {
     const selectOptionsSpan = selectOptions?.querySelector('span');
     const allActionButtons = [
-        grayscaleBtn, sepiaBtn, invertBtn, rotateLeftBtn, rotateRightBtn, revertBtn, confirmCropBtn,
+        grayscaleBtn, sepiaBtn, invertBtn, rotateLeftBtn, rotateRightBtn, confirmCropBtn,
         cancelCropBtn, confirmSnip1Btn, startSelection2Btn, confirmSnip2Btn, cancelSnipBtn,
         addTextBtn, addBubbleBtn
     ];
@@ -212,15 +321,19 @@ function updateToolStates() {
     if (!imageLoaded) {
         Object.entries(toolButtonsMap).forEach(([name, btn]) => { if(btn) btn.disabled = (name !== 'select'); });
         allActionButtons.forEach(el => { if (el) el.disabled = true; });
+        if (revertBtn) revertBtn.disabled = true;
         if (imageCanvas) imageCanvas.style.cursor = 'default';
         if (selectOptionsSpan) selectOptionsSpan.textContent = "Load an image to begin.";
         return;
     }
 
     // Enable most buttons by default when image loaded
-    [revertBtn, grayscaleBtn, sepiaBtn, invertBtn, rotateLeftBtn, rotateRightBtn].forEach(el => { if (el) el.disabled = false; });
+    [grayscaleBtn, sepiaBtn, invertBtn, rotateLeftBtn, rotateRightBtn].forEach(el => { if (el) el.disabled = false; });
     Object.values(toolButtonsMap).forEach(btn => { if (btn) btn.disabled = false; });
     if (downloadLnk) { downloadLnk.style.pointerEvents = 'auto'; downloadLnk.style.opacity = 1; }
+
+    // Enable/Disable Undo button based on history stack
+    if (revertBtn) revertBtn.disabled = historyStack.length === 0;
 
     let cursor = 'default';
     let statusMessage = 'Ready.';
@@ -239,7 +352,8 @@ function updateToolStates() {
 
     // Disable other actions while dragging
     if (isDragging) {
-        [grayscaleBtn, sepiaBtn, invertBtn, rotateLeftBtn, rotateRightBtn, revertBtn].forEach(el => { if (el) el.disabled = true; });
+        [grayscaleBtn, sepiaBtn, invertBtn, rotateLeftBtn, rotateRightBtn].forEach(el => { if (el) el.disabled = true; });
+        if (revertBtn) revertBtn.disabled = true;
         if (downloadLnk) { downloadLnk.style.pointerEvents = 'none'; downloadLnk.style.opacity = 0.5; }
     }
 
@@ -277,19 +391,22 @@ const filterInvert = (data) => { for (let i = 0; i < data.length; i += 4) { data
 function applyFilter(filterFunction) {
     if (!imageLoaded || !ctx) return alert('Load an image first.');
     if (isDragging) return alert('Finish action first.');
+    saveStateToHistory(); // Save state BEFORE applying filter
     try {
         let buffer = currentImageDataForRedraw ? new ImageData(new Uint8ClampedArray(currentImageDataForRedraw.data), currentImageDataForRedraw.width, currentImageDataForRedraw.height) : ctx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
         if (!buffer) throw new Error("Could not get image data.");
         filterFunction(buffer.data);
         ctx.putImageData(buffer, 0, 0);
-        updateCurrentImageStateBuffer();
-    } catch (e) { console.error("Filter error:", e); alert("Filter failed."); redrawBaseImage(); }
+        updateCurrentImageStateBuffer(); // Update buffer with filtered image
+        redrawFullCanvas(); // Redraw base + objects
+    } catch (e) { console.error("Filter error:", e); alert("Filter failed."); redrawFullCanvas(); } // Also redraw on error
     updateToolStates();
 }
 
 function rotateCanvas(degrees) {
     if (!imageLoaded || !ctx) return alert('Load an image first.');
     if (isDragging) return alert('Finish action first.');
+    saveStateToHistory(); // Save state BEFORE rotating
     const sourceCanvas = document.createElement('canvas');
     if (!imageCanvas) return;
     sourceCanvas.width = imageCanvas.width; sourceCanvas.height = imageCanvas.height;
@@ -307,9 +424,16 @@ function rotateCanvas(degrees) {
     tempCtx.translate(NW / 2, NH / 2); tempCtx.rotate(rad); tempCtx.drawImage(sourceCanvas, -CW / 2, -CH / 2);
     imageCanvas.width = NW; imageCanvas.height = NH;
     ctx.clearRect(0, 0, NW, NH); ctx.drawImage(tempCanvas, 0, 0);
-    updateCurrentImageStateBuffer();
+    updateCurrentImageStateBuffer(); // Update buffer with rotated image
+
+    // Rotation invalidates object coordinates relative to the new canvas dimensions/orientation
+    // Simplest approach for now: clear objects. More complex: transform object coords.
+    canvasObjects = [];
+    console.log("Cleared objects due to rotation.");
+
     if (snipState !== 'idle') { snipState = 'idle'; snip1Data = null; snip1Rect = null; snip2Rect = null; }
     resetToolState(activeTool);
+    redrawFullCanvas(); // Redraw rotated base (objects cleared)
     updateToolStates();
 }
 
@@ -366,9 +490,11 @@ function handleDrawMouseMove() {
 }
 function handleDrawMouseUp() {
     if (!ctx || drawPath.length < 2) {
-        drawPath = []; return;
+        drawPath = []; redrawFullCanvas(); return; // Redraw even if no line added, to clear preview if any
     }
-    redrawBaseImage();
+    saveStateToHistory(); // Save state BEFORE drawing the final line permanently
+    redrawBaseImage(); // Redraw without the preview line (draws objects too via drawCanvasObjects call)
+    // Draw the final line onto the base canvas
     ctx.beginPath();
     ctx.moveTo(drawPath[0].x, drawPath[0].y);
     for (let i = 1; i < drawPath.length; i++) { ctx.lineTo(drawPath[i].x, drawPath[i].y); }
@@ -376,48 +502,111 @@ function handleDrawMouseUp() {
     ctx.strokeStyle = drawColorInput?.value ?? '#ff0000';
     ctx.lineWidth = parseInt(drawSizeInput?.value ?? '5', 10);
     ctx.stroke();
-    updateCurrentImageStateBuffer();
+    updateCurrentImageStateBuffer(); // Update the buffer to include the drawn line
     drawPath = [];
+    redrawFullCanvas(); // Ensure objects are redrawn over the final line
 }
 
-// Text Placement
+// Text Placement - Calculate and store bounding box
 function handleTextMouseDown() {
     if (!ctx) return;
-    console.log(`Text MouseDown: activeTool=${activeTool}, textToPlace='${textToPlace}'`);
     if (activeTool === 'text' && textToPlace) {
-        console.log("Placing text...");
-        textPlacementCoords = { x: startCoords.x, y: startCoords.y };
-        redrawBaseImage();
-        ctx.fillStyle = textColorInput?.value ?? '#000000';
-        ctx.font = `${textSizeInput?.value ?? '30'}px ${textFontInput?.value ?? 'Arial'}`;
-        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-        ctx.fillText(textToPlace, textPlacementCoords.x, textPlacementCoords.y);
-        updateCurrentImageStateBuffer();
-        textToPlace = ''; textPlacementCoords = null; isDragging = false;
-        // Keep text in input box for potential re-use or modification
+        console.log("Creating text object...");
+
+        // Estimate bounding box before creating object
+        const fontSize = textSizeInput?.value ?? '30';
+        const fontFace = textFontInput?.value ?? 'Arial';
+        ctx.font = `${fontSize}px ${fontFace}`; // Set font for measurement
+        const textMetrics = ctx.measureText(textToPlace);
+        // Note: textMetrics provides width, but height estimation is complex.
+        // Using fontSize as an approximation for height is common but not perfect.
+        // Actual bounding boxes (actualBoundingBoxAscent/Descent) are more accurate but experimental.
+        const estimatedHeight = parseFloat(fontSize); // Use font size as height proxy
+        const estimatedWidth = textMetrics.width;
+
+        const textObject = {
+            type: 'text',
+            text: textToPlace,
+            x: startCoords.x,
+            y: startCoords.y,
+            width: estimatedWidth,
+            height: estimatedHeight,
+            color: textColorInput?.value ?? '#000000',
+            size: fontSize,
+            font: fontFace
+        };
+        canvasObjects.push(textObject);
+        console.log("Text object added:", textObject);
+
+        textToPlace = '';
+        textPlacementCoords = null;
+        isDragging = false;
+        redrawFullCanvas();
         updateToolStates();
-    } else { isDragging = false; }
+    } else {
+        // No selection logic here anymore, moved to global handler
+        isDragging = false;
+    }
 }
-function handleTextMouseMove() { /* No preview */ }
+function handleTextMouseMove() { /* No preview for now */ }
 function handleTextMouseUp() { /* Action on down */ }
 
-// Bubble Placement
+// Bubble Placement - Store initial size
 function handleBubbleMouseDown() {
     if (!ctx) return;
-    console.log(`Bubble MouseDown: activeTool=${activeTool}, bubbleText='${bubbleToPlace.text}'`);
     if (activeTool === 'bubble' && bubbleToPlace.text) {
-        console.log("Placing bubble...");
-        bubblePlacementCoords = { x: startCoords.x, y: startCoords.y };
-        redrawBaseImage();
-        drawComicBubble(ctx, bubblePlacementCoords.x, bubblePlacementCoords.y, bubbleToPlace.text, bubbleToPlace);
-        updateCurrentImageStateBuffer();
-        bubbleToPlace.text = ''; // Clear the text to place after placing
-        // Keep text in input box?
-        bubblePlacementCoords = null; isDragging = false;
+        console.log("Creating bubble object...");
+
+        // --- Calculate Bounding Box & Initial Size ---
+        const initialFont = '14px Comic Sans MS'; // TODO: Make configurable
+        const initialFontSize = 14;
+        const bubbleOptions = {
+            type: bubbleToPlace.type,
+            stroke: bubbleToPlace.color,
+            fill: bubbleToPlace.fill,
+            font: initialFont
+        };
+        ctx.font = bubbleOptions.font;
+        const textMetrics = ctx.measureText(bubbleToPlace.text);
+        // Define constants used in calculation (matching drawComicBubble)
+        const padding = 10;
+        const tailHeight = 15;
+        const textWidth = textMetrics.width;
+        const textHeight = initialFontSize;
+        const rectWidth = textWidth + 2 * padding;
+        const rectHeight = textHeight + 2 * padding;
+        const bubbleX = startCoords.x - rectWidth / 2;
+        const bubbleY = startCoords.y - rectHeight / 2 - tailHeight;
+        // --- End Calculation ---
+
+        const bubbleObject = {
+            type: 'bubble',
+            bubbleType: bubbleToPlace.type,
+            text: bubbleToPlace.text,
+            anchorX: startCoords.x,
+            anchorY: startCoords.y,
+            x: bubbleX,
+            y: bubbleY,
+            width: rectWidth,
+            height: rectHeight,
+            color: bubbleToPlace.color,
+            fill: bubbleToPlace.fill,
+            font: initialFont,
+            size: initialFontSize // Store initial numeric size
+        };
+        canvasObjects.push(bubbleObject);
+        console.log("Bubble object added:", bubbleObject);
+
+        bubbleToPlace.text = '';
+        bubblePlacementCoords = null;
+        isDragging = false;
+        redrawFullCanvas();
         updateToolStates();
-    } else { isDragging = false; }
+     } else {
+        isDragging = false;
+    }
 }
-function handleBubbleMouseMove() { /* No preview */ }
+function handleBubbleMouseMove() { /* No preview for now */ }
 function handleBubbleMouseUp() { /* Action on down */ }
 
 // ==================================
@@ -427,8 +616,8 @@ function handleConfirmCrop() {
      if (activeTool !== 'crop' || isDragging || !ctx) return;
     const normRect = getNormalizedRect(startCoords, currentCoords);
     if (!normRect) return alert("Invalid crop area. Drag first.");
+    saveStateToHistory(); // Save state BEFORE cropping
     try {
-        redrawBaseImage();
         const croppedImageData = ctx.getImageData(normRect.x, normRect.y, normRect.width, normRect.height);
         const tempCanvas = document.createElement('canvas'); tempCanvas.width = normRect.width; tempCanvas.height = normRect.height;
         const tempCtx = tempCanvas.getContext('2d');
@@ -436,9 +625,11 @@ function handleConfirmCrop() {
         tempCtx.putImageData(croppedImageData, 0, 0);
         if (imageCanvas) { imageCanvas.width = normRect.width; imageCanvas.height = normRect.height; }
         ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height); ctx.drawImage(tempCanvas, 0, 0);
-        updateCurrentImageStateBuffer();
+        updateCurrentImageStateBuffer(); // Update buffer with CROPPED base image
+        canvasObjects = []; // Clear objects after crop (coordinates are now invalid)
         setActiveTool('select');
-    } catch (e) { console.error("Crop error:", e); alert("Crop failed."); redrawBaseImage(); setActiveTool('select'); }
+        redrawFullCanvas(); // Redraw cropped base (objects are cleared)
+    } catch (e) { console.error("Crop error:", e); alert("Crop failed."); redrawFullCanvas(); setActiveTool('select'); }
     updateToolStates();
 }
 
@@ -469,17 +660,20 @@ function handleConfirmSnip2() {
      if (activeTool !== 'snip' || snipState !== 'selecting2' || !snip1Data || !snip1Rect || isDragging || !ctx) return;
     const normRect = getNormalizedRect(startCoords, currentCoords);
     if (!normRect) return alert("Invalid selection for Snip 2.");
+    saveStateToHistory(); // Save state BEFORE swapping
     snip2Rect = normRect;
     try {
-        redrawBaseImage();
+        redrawBaseImage(); // Redraw to get clean state before getting snip2 data
         const snip2Data = ctx.getImageData(snip2Rect.x, snip2Rect.y, snip2Rect.width, snip2Rect.height);
         ctx.putImageData(snip2Data, snip1Rect.x, snip1Rect.y);
         ctx.putImageData(snip1Data, snip2Rect.x, snip2Rect.y);
         updateCurrentImageStateBuffer();
+        canvasObjects = [];
         snipState = 'swapped';
         snip1Data = null; snip1Rect = null; snip2Rect = null;
         startCoords = { x: 0, y: 0 }; currentCoords = { x: 0, y: 0 };
-    } catch (e) { console.error("Snip 2 Swap error:", e); alert("Swap failed."); redrawBaseImage(); snipState = 'selected1'; snip2Rect = null; }
+        redrawFullCanvas(); // Redraw swapped base (objects cleared)
+    } catch (e) { console.error("Snip 2 Swap error:", e); alert("Swap failed."); redrawFullCanvas(); snipState = 'selected1'; }
     updateToolStates();
 }
 
@@ -514,57 +708,221 @@ function handleBubbleAddClick() {
 //         Global Handlers
 // ==================================
 
-// Add the missing canvas handlers definitions here
 function handleCanvasMouseDown(event) {
-     if (!imageLoaded || isDragging || !ctx) return;
+    if (!imageLoaded || !ctx) return;
+    if (isDragging) return; // Prevent starting new action if already dragging/resizing
+
     startCoords = getCanvasCoordinates(event);
     currentCoords = startCoords;
-    isDragging = true;
-    // Call the specific handler for the active tool
-    switch (activeTool) {
-        case 'crop': case 'snip': handleSelectionMouseDown(); break;
-        case 'draw': handleDrawMouseDown(); break;
-        case 'text': handleTextMouseDown(); break;
-        case 'bubble': handleBubbleMouseDown(); break;
-        default: isDragging = false; break; // No drag action for select tool
+    isDragging = false;
+    resizingHandle = null; // Reset resizing state on every new click
+
+    // --- Check for RESIZE HANDLE click first if an object is selected ---
+    if (activeTool === 'select' && selectedObject) {
+        const obj = selectedObject;
+        const x = obj.x;
+        const y = obj.y;
+        const w = obj.width;
+        const h = obj.height;
+
+        // Define bottom-right handle rect
+        const handleRect = {
+            x: x + w - HANDLE_SIZE / 2,
+            y: y + h - HANDLE_SIZE / 2,
+            width: HANDLE_SIZE,
+            height: HANDLE_SIZE
+        };
+
+        console.log(`Checking resize handle click at:`, startCoords, ` | Handle Rect:`, handleRect);
+        if (isPointInRect(startCoords, handleRect)) {
+            isDragging = true;
+            resizingHandle = 'bottomRight';
+            // Store initial state for calculations during resize
+            resizeStart = { x: obj.x, y: obj.y, width: obj.width, height: obj.height, size: obj.size, anchorX: obj.anchorX, anchorY: obj.anchorY };
+            console.log(`   >>> HIT Resize Handle! Starting resize. Initial state:`, resizeStart);
+            // Don't proceed to check for object selection/deselection
+            updateToolStates();
+            return; // Stop processing this click further
+        }
     }
-    updateToolStates(); // Update UI based on dragging state
+
+    // --- If not clicking a resize handle, proceed with TOOL ACTION or OBJECT SELECTION ---
+    selectedObject = null; // Deselect previous object if not clicking its handle
+    redrawFullCanvas(); // Redraw to remove old selection highlight immediately
+
+    switch (activeTool) {
+        case 'select':
+            // Iterate backwards to select topmost object first
+            for (let i = canvasObjects.length - 1; i >= 0; i--) {
+                const obj = canvasObjects[i];
+                const objRect = { x: obj.x, y: obj.y, width: obj.width, height: obj.height };
+                console.log(`   Checking object ${i}:`, obj, ` | Rect:`, objRect);
+                if (isPointInRect(startCoords, objRect)) {
+                    selectedObject = obj;
+                    console.log(`   >>> HIT! Assigning selectedObject:`, selectedObject);
+                    canvasObjects.splice(i, 1);
+                    canvasObjects.push(selectedObject);
+                    clickOffset = { x: startCoords.x - selectedObject.x, y: startCoords.y - selectedObject.y };
+                    if (selectedObject.type === 'bubble') {
+                        anchorOffset = { x: startCoords.x - selectedObject.anchorX, y: startCoords.y - selectedObject.anchorY };
+                    } else {
+                        anchorOffset = { x: 0, y: 0 };
+                    }
+                    isDragging = true; // Start dragging the selected object
+                    console.log("Selected object:", selectedObject, "ClickOffset:", clickOffset, "AnchorOffset:", anchorOffset);
+                    break;
+                }
+            }
+            if (!selectedObject) {
+                console.log("Clicked empty area (global handler).");
+            }
+            redrawFullCanvas(); // Redraw again to show new selection highlight (or lack thereof)
+            break;
+        case 'crop': case 'snip':
+            isDragging = true;
+            handleSelectionMouseDown();
+            break;
+        case 'draw':
+            isDragging = true;
+            handleDrawMouseDown();
+            break;
+        case 'text':
+             handleTextMouseDown();
+             break;
+        case 'bubble':
+             handleBubbleMouseDown();
+             break;
+        default:
+            isDragging = false;
+            break;
+    }
+    updateToolStates();
 }
 
 function handleCanvasMouseMove(event) {
-    if (!isDragging || !imageLoaded || !ctx) return;
+    if (!imageLoaded || !ctx) return;
+    if (!isDragging) return;
+
     currentCoords = getCanvasCoordinates(event);
-    // Call the specific handler for the active tool
-    switch (activeTool) {
-        case 'crop': case 'snip': handleSelectionMouseMove(); break;
-        case 'draw': handleDrawMouseMove(); break;
-        case 'text': handleTextMouseMove(); break;
-        case 'bubble': handleBubbleMouseMove(); break;
+
+    // --- Handle RESIZING --- (if a handle is being dragged)
+    if (activeTool === 'select' && resizingHandle) {
+        if (selectedObject) {
+            const dx = currentCoords.x - startCoords.x;
+            const dy = currentCoords.y - startCoords.y;
+            let newWidth = resizeStart.width + dx;
+            let newHeight = resizeStart.height + dy;
+            if (newWidth < HANDLE_SIZE * 2) newWidth = HANDLE_SIZE * 2;
+            if (newHeight < HANDLE_SIZE * 2) newHeight = HANDLE_SIZE * 2;
+
+            // Update dimensions visually for the box (might not perfectly match content)
+            selectedObject.width = newWidth;
+            selectedObject.height = newHeight;
+
+            // --- Update Text Size --- (Proportional to width change)
+            if (selectedObject.type === 'text' && resizeStart.width > 0) {
+                const originalSize = parseFloat(resizeStart.size);
+                const newSize = Math.max(5, originalSize * (newWidth / resizeStart.width));
+                selectedObject.size = newSize.toFixed(1);
+                selectedObject.height = newSize; // Height approx = font size
+            }
+
+            // --- Update Bubble Size (Font) --- (Proportional to width change)
+            if (selectedObject.type === 'bubble' && resizeStart.width > 0) {
+                const originalSize = parseFloat(resizeStart.size);
+                const newSize = Math.max(5, originalSize * (newWidth / resizeStart.width));
+                selectedObject.size = newSize.toFixed(1); // Store numeric size
+                // Update font string (assuming Comic Sans MS for now)
+                selectedObject.font = `${selectedObject.size}px Comic Sans MS`;
+                // Height of the box is updated above, drawing uses font
+            }
+
+            redrawFullCanvas();
+        }
     }
-    // No need to call updateToolStates() on every move, it's handled by tool-specific handlers if needed
+    // --- Handle MOVING --- (if dragging but not resizing)
+    else if (activeTool === 'select' && selectedObject) {
+        const newX = currentCoords.x - clickOffset.x;
+        const newY = currentCoords.y - clickOffset.y;
+        selectedObject.x = newX;
+        selectedObject.y = newY;
+        if (selectedObject.type === 'bubble') {
+            selectedObject.anchorX = currentCoords.x - anchorOffset.x;
+            selectedObject.anchorY = currentCoords.y - anchorOffset.y;
+        }
+        redrawFullCanvas();
+    }
+    // --- Handle other tool drags --- (crop, snip, draw)
+    else {
+        switch (activeTool) {
+            case 'crop': case 'snip': handleSelectionMouseMove(); break;
+            case 'draw': handleDrawMouseMove(); break;
+        }
+    }
 }
 
 function handleCanvasMouseUp(event) {
-     if (!isDragging || !imageLoaded || !ctx) return;
-    isDragging = false;
-    currentCoords = getCanvasCoordinates(event); // Capture final coords
-    // Call the specific handler for the active tool
+    if (!imageLoaded || !ctx) return;
+    if (!isDragging) return;
+
+    currentCoords = getCanvasCoordinates(event);
+    const wasDragging = isDragging;
+    const wasResizing = resizingHandle !== null;
+
+    isDragging = false; // Stop dragging/resizing
+    resizingHandle = null; // Reset handle state
+
     switch (activeTool) {
+        case 'select':
+            if (wasResizing && selectedObject) {
+                console.log("Finished resizing object:", selectedObject);
+                // Recalculate final text width/height based on final size
+                if (selectedObject.type === 'text') {
+                    ctx.font = `${selectedObject.size}px ${selectedObject.font}`;
+                    const finalMetrics = ctx.measureText(selectedObject.text);
+                    selectedObject.width = finalMetrics.width;
+                    selectedObject.height = parseFloat(selectedObject.size);
+                }
+                // Recalculate final bubble width/height based on final size
+                if (selectedObject.type === 'bubble') {
+                    ctx.font = selectedObject.font; // Use the potentially updated font string
+                    const finalMetrics = ctx.measureText(selectedObject.text);
+                    const padding = 10;
+                    const finalFontSize = selectedObject.size;
+                    selectedObject.width = finalMetrics.width + 2 * padding;
+                    selectedObject.height = parseFloat(finalFontSize) + 2 * padding;
+                    // Anchor point does not need recalculation unless we change positioning logic
+                }
+            } else {
+                console.log("Finished moving object:", selectedObject);
+            }
+            // Keep object selected
+            break;
         case 'crop': case 'snip': handleSelectionMouseUp(); break;
         case 'draw': handleDrawMouseUp(); break;
-        case 'text': handleTextMouseUp(); break;
-        case 'bubble': handleBubbleMouseUp(); break;
     }
-    updateToolStates(); // Update UI now that dragging stopped
+
+    if (wasDragging) {
+        redrawFullCanvas();
+        updateToolStates();
+    }
 }
 
 function handleCanvasMouseLeave(event) {
      if (isDragging) {
         console.log('Mouse left canvas during drag, canceling action.');
-        isDragging = false;
+        // If dragging an object, revert its position? Or just stop drag?
+        // Let's just stop the drag for now.
+        if (activeTool === 'select' && selectedObject) {
+            // Maybe snap back? For now, just stop.
+             console.log("Cancelled object drag.");
+        }
+
+        isDragging = false; // Stop dragging regardless of tool
+        selectedObject = null; // Deselect object if dragging out
+
         const toolBeingReset = activeTool;
-        resetToolState(toolBeingReset); // Reset the state of the tool that was active
-        redrawBaseImage(); // Clean up any visual artifacts
+        resetToolState(toolBeingReset); // This calls redrawFullCanvas now
         updateToolStates(); // Update UI
     }
 }
@@ -587,8 +945,11 @@ function handleImageLoad(event) {
             ctx.drawImage(img, 0, 0);
             imageLoaded = true;
             updateCurrentImageStateBuffer();
+            historyStack = []; // Clear history for new image
+            canvasObjects = []; // Clear objects for new image
             if(downloadLnk) { downloadLnk.href = '#'; downloadLnk.download = `edited-${file.name || 'image'}.png`; }
             setActiveTool('select');
+            redrawFullCanvas(); // Initial draw (should be blank or show placeholder if needed)
             updateToolStates();
         }
         img.onerror = function() {
@@ -608,17 +969,44 @@ function handleImageLoad(event) {
     reader.readAsDataURL(file);
 }
 
-function handleRevert() {
-    if (!imageLoaded || !originalImage) return;
-    if (isDragging) isDragging = false;
-    if (!imageCanvas || !ctx) return;
-    if (imageCanvas.width !== originalImage.naturalWidth || imageCanvas.height !== originalImage.naturalHeight) {
-       imageCanvas.width = originalImage.naturalWidth;
-       imageCanvas.height = originalImage.naturalHeight;
+// Rename handleRevert to handleUndo and implement Undo logic
+function handleUndo() {
+    if (historyStack.length === 0) {
+        console.log("History stack empty, cannot undo.");
+        // Optionally alert user? Button should be disabled anyway.
+        return;
     }
-    ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
-    ctx.drawImage(originalImage, 0, 0, imageCanvas.width, imageCanvas.height);
-    updateCurrentImageStateBuffer();
+    if (isDragging) {
+        console.log("Cannot undo while dragging.");
+        return;
+    }
+
+    const lastState = historyStack.pop();
+    console.log(`Undo: Restoring state. Stack size: ${historyStack.length}`);
+
+    if (lastState && imageCanvas && ctx) {
+        currentImageDataForRedraw = lastState;
+        if (imageCanvas.width !== lastState.width || imageCanvas.height !== lastState.height) {
+             imageCanvas.width = lastState.width;
+             imageCanvas.height = lastState.height;
+        }
+        // Simple Undo: Assume objects are gone when base image changes
+        // More complex undo would need to save/restore object state too
+        canvasObjects = [];
+        redrawFullCanvas(); // Redraw restored base image (objects cleared)
+    } else {
+        console.error("Error restoring history state...");
+        if (originalImage && imageCanvas && ctx) {
+             console.log("Fallback: Reverting to original image due to undo error.");
+             imageCanvas.width = originalImage.naturalWidth;
+             imageCanvas.height = originalImage.naturalHeight;
+             ctx.drawImage(originalImage, 0, 0);
+             updateCurrentImageStateBuffer();
+             historyStack = [];
+             canvasObjects = []; // Clear objects on fallback too
+             redrawFullCanvas();
+        }
+    }
     setActiveTool('select');
     updateToolStates();
 }
@@ -628,9 +1016,10 @@ function handleDownload(event) {
     if (isDragging) { alert('Finish action first.'); event.preventDefault(); return; }
     try {
         setActiveTool('select');
-        redrawBaseImage();
+        // Ensure objects are drawn onto the canvas before generating URL
+        redrawFullCanvas();
         const dataURL = imageCanvas.toDataURL('image/png');
-        if(downloadLnk) downloadLnk.href = dataURL; // download attribute set on load
+        if(downloadLnk) downloadLnk.href = dataURL;
     } catch (error) { console.error('Download error:', error); alert('Download failed.'); event.preventDefault(); }
 }
 
@@ -638,10 +1027,13 @@ function handleDownload(event) {
 //      Comic Bubble Drawing
 // ==================================
 function drawComicBubble(ctx, x, y, text, options) {
+    // Note: x, y passed here are currently the CENTER/click point used for tail calculation.
+    // Selection logic uses the calculated top-left x,y stored on the object.
+    // This needs careful alignment if we want bounding box to be exact.
     if (!ctx) return;
-    console.log("Drawing bubble with options:", options);
+    // console.log("Drawing bubble with options:", options); // Reduce noise
     const defaultOptions = { type: 'speech', stroke: '#000', fill: '#fff', font: '14px Comic Sans MS', padding: 10, tailHeight: 15, tailWidth: 10 };
-    const opts = { ...defaultOptions, ...options };
+    const opts = { ...defaultOptions, ...options }; // Use passed options
 
     ctx.save(); // Save context state
     ctx.font = opts.font;
@@ -651,7 +1043,7 @@ function drawComicBubble(ctx, x, y, text, options) {
     const rectWidth = textWidth + 2 * opts.padding;
     const rectHeight = textHeight + 2 * opts.padding;
     let rectX = x - rectWidth / 2;
-    let rectY = y - rectHeight / 2 - opts.tailHeight; // Position bubble above click point + tail
+    let rectY = y - rectHeight / 2 - opts.tailHeight;
 
     ctx.fillStyle = opts.fill;
     ctx.strokeStyle = opts.stroke;
@@ -752,7 +1144,7 @@ function initializeApp() {
     if (invertBtn) invertBtn.addEventListener('click', () => applyFilter(filterInvert)); else console.warn("invertBtn not found");
     if (rotateLeftBtn) rotateLeftBtn.addEventListener('click', () => rotateCanvas(-90)); else console.warn("rotateLeftBtn not found");
     if (rotateRightBtn) rotateRightBtn.addEventListener('click', () => rotateCanvas(90)); else console.warn("rotateRightBtn not found");
-    if (revertBtn) revertBtn.addEventListener('click', handleRevert); else console.warn("revertBtn not found");
+    if (revertBtn) revertBtn.addEventListener('click', handleUndo); else console.warn("revertBtn not found");
     if (downloadLnk) downloadLnk.addEventListener('click', handleDownload); else console.warn("downloadLnk not found");
 
     // Tool Option Listeners
@@ -776,6 +1168,7 @@ function initializeApp() {
     if (imageLoader) imageLoader.addEventListener('change', handleImageLoad); else console.warn("imageLoader not found");
 
     setActiveTool('select');
+    redrawFullCanvas(); // Initial draw (should be blank or show placeholder if needed)
     updateToolStates();
     console.log("App initialized.");
 }
