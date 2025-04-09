@@ -10,12 +10,23 @@
 
     <h1>PNG Photo Editor</h1>
 
-    <input type="file" id="imageLoader" accept="image/png">
+    <input type="file" id="imageLoader" accept="image/png, image/jpeg">
     <br>
     <canvas id="imageCanvas"></canvas>
     <br>
-    <button id="grayscaleBtn">Apply Grayscale</button>
-    <br>
+    <div id="filterControls" style="margin-bottom: 15px;">
+        <button id="grayscaleBtn">Apply Grayscale</button>
+        <button id="sepiaBtn">Apply Sepia</button>
+        <button id="invertBtn">Invert Colors</button>
+    </div>
+
+    <div id="transformControls" style="margin-bottom: 15px;">
+        <button id="rotateLeftBtn">Rotate 90° Left</button>
+        <button id="rotateRightBtn">Rotate 90° Right</button>
+        <button id="startCropBtn">Select Crop Area</button>
+        <button id="confirmCropBtn" disabled>Confirm Crop</button>
+    </div>
+
     <a id="downloadLnk" download="edited-image.png" href="#">Download Image</a>
 
     <hr style="margin: 20px 0; width: 80%;">
@@ -26,7 +37,7 @@
         <button id="confirmSnip1Btn" disabled>Confirm Snip 1 & Clear</button>
         <button id="startSelection2Btn" disabled>Select Area 2</button>
         <button id="confirmSnip2Btn" disabled>Confirm Snip 2 & Swap</button>
-        <button id="resetSnipBtn">Reset Snip</button>
+        <button id="revertBtn">Revert to Original</button>
         <div id="snipStatus" style="width: 100%; text-align: center; margin-top: 5px; font-style: italic;">Load an image to begin.</div>
     </div>
 
